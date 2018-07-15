@@ -1,30 +1,67 @@
 import sqlite3 as lite
+from paths import *
+import serviceFunctions as sf
+import numpy
 
-#compName = "Ilya"
-#compName = 'work'
-compName = 'Ilya'
-driverPath = ""
-dbasePath = ""
-if compName == "Ilya":
-    driverPath = "C:/Users/илья/Dropbox/Ilya-Papa/father_files/drivers/chromedriver.exe"
-    dbasePath = "C:/tmp/kinoman.db"
-elif compName == "work":
-    driverPath = "C:/Program Files (x86)/Google/Chrome/Application/chromedriver.exe"
-    dbasePath = "C:/Users/vkovalenko/Dropbox/Ilya-Papa/father_files/bases/kinoman.db"
-elif compName == "notebook":
-    driverPath = "C:/Users/Vlad/Dropbox/Ilya-Papa/father_files/drivers/chromedriver.exe"
-    dbasePath = "C:/Users/Vlad/Dropbox/Ilya-Papa/father_files/bases/kinoman.db"
+class User:
+    id = -1
+    c = None
+    marks = {}
+    linked_users = []
+    def __init__(self, _id, _c):
+        self.id = _id
+        self.c = _c
 
-conn = lite.connect(dbasePath)
+    def get_marks(self):
+        m_rows = c.execute("SELECT mark, filmID FROM marks WHERE userID = {}".format(self.id)).fetchall()
+        for row in m_rows:
+            self.marks[row[1]] = row[0]
+
+    def get_linked_users(self):
+        if len(self.marks) > 0:
+            for film_id in self.marks.keys():
+                f = Film(film_id,self.c)
+                f.get_users()
+                for u in f.users.keys():
+                    self.linked_users.append(u)
+
+        
+
+
+class Film:
+    id = -1
+    c = None
+    users = {}
+    def __init__(self,_id,_c):
+        self.id = _id
+        self.c = _c
+
+    def get_users(self):
+        u_rows = c.execute("SELECT user_id,mark FROM marks WHERE film_id = {}".format(self.id)).fetchall()
+        for row in u_rows:
+            self.users[row[0]] = row[1]
+
+
+
+
+db_path = sf.get_right_path(db_paths)
+conn = lite.connect(db_path)
 c = conn.cursor()
 users = c.execute("SELECT id FROM users WHERE flgChecked = 0 ORDER BY id")
 for u_row in users.fetchall():
-    flg_stop = c.execute("SELECT propertyValue FROM properties WHERE propertyName = 'stop'").fetchone()
-    if flg_stop[0] == 1:
-        break
+    cr_user = User(u_row[0],c)
+    cr_user.get_marks()
+    cr_user.get_linked_users()
+
+
+
     cr_user_id = u_row[0]
-    cr_user_films = c.execute("SELECT mark, filmID FROM marks WHERE userID = " + str(cr_user_id)).fetchall()
-    next_user = str(u_row[0])
+    cr_user_marks = {}
+    cr_user_marks_rows = c.execute("SELECT mark, filmID FROM marks WHERE userID = {}".format(cr_user_id)).fetchall()
+    for mark in cr_user_marks_rows:
+        cr_user_marks[cr_user_marks_rows[1]] = cr_user_marks_rows[0]
+
+
 
     users_to_compare = c.execute("SELECT id FROM users WHERE id > " + next_user)
     cnt_commit = 0
