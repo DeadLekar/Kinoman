@@ -23,13 +23,11 @@ driverPath = ""
 dbasePath = ""
 if compName == "Ilya":
     driverPath = "C:/Users/илья/Dropbox/Ilya-Papa/father_files/drivers/chromedriver.exe"
-    dbasePath = "C:/Users/илья/Dropbox/Ilya-Papa/father_files/bases/kinoman.db"
 elif compName == "work":
     driverPath = "C:/Users/илья/Dropbox/Ilya-Papa/father_files/drivers/chromedriver.exe"
-    dbasePath = ""
 elif compName == "notebook":
     driverPath = "C:/Users/илья/Dropbox/Ilya-Papa/father_files/drivers/chromedriver.exe"
-    dbasePath = ""
+
 
 conn = lite.connect(dbasePath)
 c = conn.cursor()
