@@ -5,12 +5,10 @@ import pandas as pd
 import datetime
 import os.path
 
-class Film:
-    id = -1
-    df_my_spectators = None  # user's marks, pandas DataFrame
-    ds = None  # DataSource object
 
+class Film:
     def __init__(self, _id, _ds):
+
         self.id = _id
         self.ds = _ds
         d = self.ds.get_spectators(self.id) # pandas data frame
@@ -18,6 +16,7 @@ class Film:
             self.df_my_spectators = pd.DataFrame(d,dtype='int32')
             # self.df_my_spectators.index = self.df_my_spectators.user_id
             # del self.df_my_spectators['user_id']
+
 
 class User:
     id = -1
@@ -32,6 +31,7 @@ class User:
             self.df_my_marks = pd.DataFrame(d)
             self.df_my_marks.index = self.df_my_marks.film_id
             del self.df_my_marks['film_id']
+
 
 class UserMatrix:
 
@@ -49,6 +49,7 @@ class UserMatrix:
             self.matrix['np'] = df[(df.mark_x == -1) & (df.mark_y == 1)].shape[0]
             self.matrix['nn'] = df[(df.mark_x == -1) & (df.mark_y == -1)].shape[0]
             self.matrix['total_sum'] = df.size/2
+
 
 class DataSource:
     flg_from_db = False # True - data will be get from data base, False - from file system
@@ -113,6 +114,7 @@ class ReferentFinder:
     MIN_INTERSECT = 3  # minimum number of films seen by both users in a pair
     users_id_list = []
     films_id_list = []
+    root_files_path = ''
     source = ''
     ds = None
     flg_to_db = False
@@ -121,8 +123,9 @@ class ReferentFinder:
     def __init__(self, _ds, _flg_to_db=True):
         # fills user_id_list
         self.ds = _ds
-        self.pairs_path = sf.get_right_path(files) + 'pairs/'
-        self.films_path = sf.get_right_path(files) + 'films/'
+        self.root_files_path = sf.get_right_path(files)
+        self.pairs_path = self.root_files_path + 'pairs/'
+        self.films_path = self.root_files_path + 'films/'
 
         users_rows = self.ds.c.execute("SELECT user_id FROM grp_users WHERE is_checked = 0 ORDER BY user_id")
         for u_row in users_rows.fetchall():
@@ -167,42 +170,58 @@ class ReferentFinder:
 
     def get_films_spectators(self):
         # try to build pairs via films
-        df_template = pd.DataFrame(columns=['user_id','pp','pn','np','nn','total_sum'])
         for film_id in self.films_id_list:
+            # check if the programm needs to be stopped
+
+            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            if flg_stop: break
             f = Film(film_id,self.ds)
-            for i in range(len(f.df_my_spectators.index)):
+            now = datetime.datetime.now()
+            for i in range(len(f.df_my_spectators.index)):  # create pairs table for each spectator
                 cr_user_id = f.df_my_spectators.loc[i].user_id
                 cr_user_mark = f.df_my_spectators.loc[i].mark
                 df_referents = f.df_my_spectators[f.df_my_spectators.user_id != cr_user_id]
-                df_result = pd.DataFrame({'user_id':list(df_referents.user_id)},dtype='int32')
-                user_file = '{}{}.txt'.format(self.pairs_path,cr_user_id)
-                if not os.path.isfile(user_file): # a new user detected
-                    the_same_matrix = df_referents[df_referents.mark == cr_user_mark]
-                    the_same_matrix.mark = 1
-                    df_result = df_result.merge(the_same_matrix, how='left', on='user_id')
-                    df_result.columns = ['user_id','the_same']
+                df_result = pd.DataFrame({'user_id': list(df_referents.user_id)},dtype='int32')
 
-                    opposit_matrix = df_referents[df_referents.mark != cr_user_mark]
-                    opposit_matrix.mark = 1
-                    df_result = df_result.merge(opposit_matrix, how='left', on='user_id')
+                the_same_matrix = df_referents[df_referents.mark == cr_user_mark]
+                the_same_matrix.mark = 1
+                df_result = df_result.merge(the_same_matrix, how='left', on='user_id')
+                df_result.columns = ['user_id', 'the_same']
 
-                    if cr_user_mark > 0:
-                        df_result.columns = ['user_id','pp', 'pn']
-                        df_result['np'] = 0
-                        df_result['nn'] = 0
-                    else:
-                        df_result.columns = ['user_id','nn', 'np']
-                        df_result['pn'] = 0
-                        df_result['pp'] = 0
-                    df_result.fillna(0,inplace=True)
-                    df_result.pp = df_result.pp.astype('int32')
-                    df_result.pn = df_result.pn.astype('int32')
-                    df_result.np = df_result.np.astype('int32')
-                    df_result.nn = df_result.nn.astype('int32')
-                    df_result.to_csv(user_file, sep=';',index=False, header=True)
+                opposite_matrix = df_referents[df_referents.mark != cr_user_mark]
+                opposite_matrix.mark = 1
+                df_result = df_result.merge(opposite_matrix, how='left', on='user_id')
+
+                if cr_user_mark > 0:
+                    df_result.columns = ['user_id', 'pp', 'pn']
+                    df_result['np'] = 0
+                    df_result['nn'] = 0
                 else:
-                    df_saved = pd.read_csv(user_file,sep=';',header=0)
-                    a = 1
+                    df_result.columns = ['user_id', 'nn', 'np']
+                    df_result['pn'] = 0
+                    df_result['pp'] = 0
+                df_result.fillna(0,inplace=True)
+                df_result.pp = df_result.pp.astype('int32')
+                df_result.pn = df_result.pn.astype('int32')
+                df_result.np = df_result.np.astype('int32')
+                df_result.nn = df_result.nn.astype('int32')
+
+                # save data
+                user_file = '{}{}.txt'.format(self.pairs_path, cr_user_id)
+                if not os.path.isfile(user_file):  # a new user detected, just save data frame
+                    df_result.to_csv(user_file, sep=';', index=False, header=True)
+                else: # the user has saved data, merge
+                    df_saved = pd.read_csv(user_file, sep=';', header=0)
+                    df_concat = pd.concat([df_result, df_saved], ignore_index=True)
+                    df_grouped = df_concat.groupby(['user_id']).sum()
+                    df_grouped.to_csv(user_file, sep=';', index=True, header=True)
+
+            self.ds.c.execute("UPDATE grp_films SET is_checked=1 WHERE film_id={}".format(f.id))
+            self.ds.conn.commit()
+
+            then = datetime.datetime.now()
+            delta = then - now
+            print('{}: {} sec, {} users'.format(f.id, delta, len(f.df_my_spectators.index)))
 
 
 ds = DataSource(False)
