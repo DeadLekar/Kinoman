@@ -226,4 +226,4 @@ class ReferentFinder:
 
 ds = DataSource(False)
 rf = ReferentFinder(ds,False)
-rf.get_films_spectators()
+rf.get_referents()
