@@ -15,9 +15,9 @@ class Film:
         self.ds = _ds
         d = self.ds.get_spectators(self.id) # pandas data frame
         if d.size > 0:
-            self.df_my_spectators = pd.DataFrame(d)
-            self.df_my_spectators.index = self.df_my_spectators.user_id
-            del self.df_my_spectators['user_id']
+            self.df_my_spectators = pd.DataFrame(d,dtype='int32')
+            # self.df_my_spectators.index = self.df_my_spectators.user_id
+            # del self.df_my_spectators['user_id']
 
 class User:
     id = -1
@@ -90,10 +90,7 @@ class DataSource:
         path = '{}films/{}.txt'.format(self.files_path,film_id)
         if os.path.isfile(path):
             df = pd.read_csv(path,sep=';',names=['user_id','mark'])
-            if user_id:
-                return df[df.user_id>user_id]
-            else:
-                return df
+            return df[df.user_id>user_id]
         else: return False
 
     def _get_marks_db(self, user_id):
@@ -174,25 +171,38 @@ class ReferentFinder:
         for film_id in self.films_id_list:
             f = Film(film_id,self.ds)
             for i in range(len(f.df_my_spectators.index)):
-                user_id = f.df_my_spectators.index[i]
-                user_mark = f.df_my_spectators.loc[user_id].mark
-                df_referents = f.df_my_spectators[f.df_my_spectators.index != user_id]
-                df_result = pd.DataFrame(index=[df_referents.index])
-                if not os.path.isfile('{}{}.txt'.format(self.pairs_path,user_id)):
-                    if user_mark > 0:
-                        pp_matrix = df_referents[df_referents.mark > 0]
-                        pp_matrix.mark = 1
-                        df_result = df_result.merge(pp_matrix,how='left',left_index=True,right_index=True)
-                        df_result.columns = ['pp']
+                cr_user_id = f.df_my_spectators.loc[i].user_id
+                cr_user_mark = f.df_my_spectators.loc[i].mark
+                df_referents = f.df_my_spectators[f.df_my_spectators.user_id != cr_user_id]
+                df_result = pd.DataFrame({'user_id':list(df_referents.user_id)},dtype='int32')
+                user_file = '{}{}.txt'.format(self.pairs_path,cr_user_id)
+                if not os.path.isfile(user_file): # a new user detected
+                    the_same_matrix = df_referents[df_referents.mark == cr_user_mark]
+                    the_same_matrix.mark = 1
+                    df_result = df_result.merge(the_same_matrix, how='left', on='user_id')
+                    df_result.columns = ['user_id','the_same']
 
-                        pn_matrix = df_referents[df_referents.mark < 0]
-                        pn_matrix.mark = 1
-                        df_result = df_result.merge(pn_matrix, how='left', left_index=True, right_index=True)
-                        df_result.columns = ['pp','pn']
-                        pass
+                    opposit_matrix = df_referents[df_referents.mark != cr_user_mark]
+                    opposit_matrix.mark = 1
+                    df_result = df_result.merge(opposit_matrix, how='left', on='user_id')
+
+                    if cr_user_mark > 0:
+                        df_result.columns = ['user_id','pp', 'pn']
+                        df_result['np'] = 0
+                        df_result['nn'] = 0
                     else:
-                        pass
-
+                        df_result.columns = ['user_id','nn', 'np']
+                        df_result['pn'] = 0
+                        df_result['pp'] = 0
+                    df_result.fillna(0,inplace=True)
+                    df_result.pp = df_result.pp.astype('int32')
+                    df_result.pn = df_result.pn.astype('int32')
+                    df_result.np = df_result.np.astype('int32')
+                    df_result.nn = df_result.nn.astype('int32')
+                    df_result.to_csv(user_file, sep=';',index=False, header=True)
+                else:
+                    df_saved = pd.read_csv(user_file,sep=';',header=0)
+                    a = 1
 
 
 ds = DataSource(False)
