@@ -4,7 +4,7 @@ import serviceFunctions as sf
 import pandas as pd
 import datetime
 import os.path
-
+from os import listdir
 
 class Film:
     def __init__(self, _id, _ds):
@@ -111,6 +111,23 @@ class DataSource:
             df['user_id']=user_id
             return df
         else: return None
+
+    def separate_marks(self):
+        # creates files for positive and negative marks
+        films_path = '{}films/'.format(self.files_path)
+        # f_pos = open('{}pos.txt'.format(self.files_path))
+        # f_neg = open('{}neg.txt'.format(self.files_path))
+        films_num = len(listdir(films_path))
+        cnt_films = 0
+        for f_name in listdir(films_path):
+            df = pd.read_csv(films_path + f_name, sep=';', names=['user_id','mark'])
+            df['film_id'] = int(f_name.split('.')[0])
+            df_pos = df[df.mark==1]
+            df_pos.to_csv('{}pos.txt'.format(self.files_path), mode='a', sep=';', header=False, index=False)
+            df_neg = df[df.mark==-1]
+            df_neg.to_csv('{}neg.txt'.format(self.files_path), mode='a', sep=';', header=False, index=False)
+            cnt_films += 1
+            if cnt_films % 1000 == 0: print(cnt_films)
 
 
 class ReferentFinder:
@@ -279,5 +296,6 @@ class ReferentFinder:
 
 
 ds = DataSource(False)
-rf = ReferentFinder(ds,False)
-rf.get_referents_v3()
+ds.separate_marks()
+# rf = ReferentFinder(ds,False)
+# rf.get_referents_v3()
