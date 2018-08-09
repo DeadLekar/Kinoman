@@ -12,10 +12,11 @@ class Film:
         self.id = _id
         self.ds = _ds
         d = self.ds.get_spectators(self.id) # pandas data frame
-        if d.size > 0:
-            self.df_my_spectators = pd.DataFrame(d,dtype='int32')
-            # self.df_my_spectators.index = self.df_my_spectators.user_id
-            # del self.df_my_spectators['user_id']
+        if d is not None:
+            if d.size > 0:
+                self.df_my_spectators = pd.DataFrame(d,dtype='int32')
+                # self.df_my_spectators.index = self.df_my_spectators.user_id
+                # del self.df_my_spectators['user_id']
 
 
 class User:
@@ -29,8 +30,8 @@ class User:
         d = self.ds.get_user_marks(self.id)
         if d.size > 0:
             self.df_my_marks = pd.DataFrame(d)
-            self.df_my_marks.index = self.df_my_marks.film_id
-            del self.df_my_marks['film_id']
+            # self.df_my_marks.index = self.df_my_marks.film_id
+            # del self.df_my_marks['film_id']
 
 
 class UserMatrix:
@@ -92,7 +93,7 @@ class DataSource:
         if os.path.isfile(path):
             df = pd.read_csv(path,sep=';',names=['user_id','mark'])
             return df[df.user_id>user_id]
-        else: return False
+        else: return None
 
     def _get_marks_db(self, user_id):
         l_users_rows = self.c.execute("SELECT film_id,mark_bin FROM marks WHERE user_id = {}".format(user_id)).fetchall()
@@ -101,12 +102,14 @@ class DataSource:
         for row in l_users_rows:
             film_id_col.append(row[0])
             mark_col.append(row[1])
-        return {'film_id': film_id_col, 'mark': mark_col}
+        return {'film_id': film_id_col, 'mark': mark_col, 'user_id':[user_id]}
 
     def _get_marks_files(self, user_id):
         path = '{}users/{}.txt'.format(self.files_path,user_id)
         if os.path.isfile(path):
-            return pd.read_csv(path, sep=';', names=['film_id', 'mark'])
+            df = pd.read_csv(path, sep=';', names=['film_id', 'mark'])
+            df['user_id']=user_id
+            return df
         else: return None
 
 
@@ -168,6 +171,57 @@ class ReferentFinder:
             self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(users[self.users_id_list[i]].id))
             self.ds.conn.commit()
 
+    def get_referents_v2(self):
+        """ get referents through films spectators"""
+        users = {}
+        # load users data
+
+        for user_id in self.users_id_list:
+            users[user_id] = User(user_id, self.ds)
+            if (len(users) % 1000) == 0: print(int(len(users) / len(self.users_id_list) * 100))
+
+        print('==== start linking ====')
+        for u_id in self.users_id_list:
+            now = datetime.datetime.now()
+            pairs_data = pd.DataFrame(columns=['user1_id', 'user2_id', 'pp', 'pn', 'np', 'nn', 'total_sum'])
+            # get referents
+            referents_all = pd.Series([])
+            for film_id in users[u_id].df_my_marks.index:
+                f = Film(film_id,self.ds)
+                if hasattr(f, 'df_my_spectators'):
+                    referents_all = referents_all.append(pd.Series(f.df_my_spectators.user_id))
+            referents_unique = referents_all.unique()
+            for r_id in referents_unique:
+                if r_id > u_id:
+                    m = UserMatrix(users[u_id].df_my_marks, users[r_id].df_my_marks, self.MIN_INTERSECT)
+                    if m.matrix:
+                        if self.flg_to_db:
+                            self.ds.c.execute("INSERT INTO pairs(user1_id,user2_id,pp,pn,np,nn,total_sum) VALUES ({},{},{},{},{},{},{})".format(u_id, r_id, m.matrix['pp'], m.matrix['pn'], m.matrix['np'], m.matrix['nn'], m.matrix['total_sum']))
+                        else:
+                            pairs_data = pairs_data.append(pd.DataFrame({'user1_id': [u_id], 'user2_id': [r_id], 'pp': m.matrix['pp'], 'pn': m.matrix['pn'], 'np': m.matrix['np'], 'nn': m.matrix['nn'], 'total_sum': m.matrix['total_sum']}))
+
+            if not self.flg_to_db:
+                pairs_data.to_csv('{}/{}.txt'.format(self.pairs_path, u_id), sep=';', index=False)
+
+            then = datetime.datetime.now()
+            delta = then - now
+            print('{}: {} sec, {} referents'.format(u_id, delta, len(referents_unique)))
+            self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(u_id))
+            self.ds.conn.commit()
+
+    def get_referents_v3(self):
+        cnt_users = 0
+        df_all_marks = pd.DataFrame(columns=['user_id','film_id','mark'])
+        for user_id in self.users_id_list:
+            cnt_users += 1
+            df_user = self.ds.get_user_marks(user_id)
+            df_all_marks = df_all_marks.append(df_user)
+            if (cnt_users % 1000) == 0: print(cnt_users / len(self.users_id_list) * 100)
+
+        for user_id in self.users_id_list:
+            df_cr = df_all_marks['user_id'==user_id]
+
+
     def get_films_spectators(self):
         # try to build pairs via films
         for film_id in self.films_id_list:
@@ -226,4 +280,4 @@ class ReferentFinder:
 
 ds = DataSource(False)
 rf = ReferentFinder(ds,False)
-rf.get_referents()
+rf.get_referents_v3()
