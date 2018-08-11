@@ -228,16 +228,68 @@ class ReferentFinder:
 
     def get_referents_v3(self):
         cnt_users = 0
-        df_all_marks = pd.DataFrame(columns=['user_id','film_id','mark'])
         for user_id in self.users_id_list:
-            cnt_users += 1
-            df_user = self.ds.get_user_marks(user_id)
-            df_all_marks = df_all_marks.append(df_user)
-            if (cnt_users % 1000) == 0: print(cnt_users / len(self.users_id_list) * 100)
+            self._get_user_referents(user_id)
 
-        for user_id in self.users_id_list:
-            df_cr = df_all_marks['user_id'==user_id]
+    def _get_user_referents(self, user_id):
+        u = User(user_id, self.ds)
+        df_cr_pos = u.df_my_marks[u.df_my_marks.mark == 1]  # positive user's marks
+        del (df_cr_pos['mark'])
+        df_cr_neg = u.df_my_marks[u.df_my_marks.mark == -1]  # negative user's marks
+        del (df_cr_neg['mark'])
 
+        df_pos = pd.read_csv('{}pos.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
+        del (df_pos['mark'])
+        df_ref_pos = df_pos[df_pos.film_id.isin(list(u.df_my_marks.film_id))]  # positive marks of other spectators of the films the user saw
+        del (df_pos)
+        df_neg = pd.read_csv('{}neg.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
+        del (df_neg['mark'])
+        df_ref_neg = df_neg[df_neg.film_id.isin(list(u.df_my_marks.film_id))]  # negative marks of other spectators of the films the user saw
+        del (df_neg)
+
+        # get pp matrix (current user's positive mark - other users' positive marks)
+        df_pp = df_cr_pos.merge(df_ref_pos, how='left', on='film_id')
+        df_pp = self._prepare_matrix(df_pp, 'pp')  # got DataFrame with index=referent's id and count of marks in 'pp_marks_cnt' column
+
+        # get pn matrix (current user's positive mark - other users' negative marks)
+        df_pn = df_cr_pos.merge(df_ref_neg, how='left', on='film_id')
+        df_pn = self._prepare_matrix(df_pn, 'pn')  # got DataFrame with index=referent's id and count of marks in 'pn_marks_cnt' column
+
+        # get np matrix (current user's negative mark - other users' positive marks)
+        df_np = df_cr_neg.merge(df_ref_pos, how='left', on='film_id')
+        df_np = self._prepare_matrix(df_np, 'np')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get nn matrix (current user's negative mark - other users' negative marks)
+        df_nn = df_cr_neg.merge(df_ref_neg, how='left', on='film_id')
+        df_nn = self._prepare_matrix(df_nn, 'nn')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get the whole matrix
+        df_total = df_pp.merge(df_pn, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_np, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_nn, on='user_id', how='outer', sort=False)
+        df_total = df_total.fillna(0)
+        df_total.pp = df_total.pp.astype('int32')
+        df_total.np = df_total.np.astype('int32')
+        df_total.pn = df_total.pn.astype('int32')
+        df_total.nn = df_total.nn.astype('int32')
+        df_total['sum'] = df_total.pp + df_total.np + df_total.pn + df_total.nn
+        df_total = df_total[['user_id','pp','pn','np','nn','sum']]
+
+        # save data
+        df_total.to_csv('{}/{}.txt'.format(self.pairs_path, user_id), sep=';', index=False)
+        self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(user_id))
+        self.ds.conn.commit()
+        print(user_id)
+
+    def _prepare_matrix(self, df, col_name):
+        del (df['film_id'])
+        df = df.fillna(0)
+        df.user_id_x = df.user_id_x.astype('int32')
+        df.user_id_y = df.user_id_y.astype('int32')
+        df = df.groupby('user_id_y').count()
+        df.columns = [col_name]
+        df['user_id'] = df.index
+        return df
 
     def get_films_spectators(self):
         # try to build pairs via films
@@ -296,6 +348,5 @@ class ReferentFinder:
 
 
 ds = DataSource(False)
-ds.separate_marks()
-# rf = ReferentFinder(ds,False)
-# rf.get_referents_v3()
+rf = ReferentFinder(ds,False)
+rf.get_referents_v3()
