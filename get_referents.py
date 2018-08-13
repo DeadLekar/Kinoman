@@ -5,7 +5,7 @@ import pandas as pd
 import datetime
 import os.path
 from os import listdir
-import numpy as np
+from sys import getsizeof
 
 class Film:
     def __init__(self, _id, _ds):
@@ -170,44 +170,110 @@ class ReferentFinder:
         for f_row in films_rows.fetchall():
             self.films_id_list.append(f_row[0])
 
-
-    def get_referents(self):
-        cnt_users = 0
-        MAX_USER_ID = len(self.users_id_list)
-        index_arr = list(range(0, MAX_USER_ID, 1))
-        if MAX_USER_ID not in index_arr:
-            index_arr.append(MAX_USER_ID)
-        for i in range(0,len(index_arr)-1):
-            self._get_user_referents(self.users_id_list[index_arr[i]:index_arr[i+1]])
+    def get_referents3(self):
+        df_pos_reader = pd.read_csv('{}pos.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
+        df_pos = pd.concat(df_pos_reader, ignore_index=True)
+        del (df_pos['mark'])
+        df_neg_reader = pd.read_csv('{}neg.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
+        df_neg = pd.concat(df_neg_reader, ignore_index=True)
+        del (df_neg['mark'])
+        for user_id in self.users_id_list:
+            self._get_user_referents3(user_id, df_pos, df_neg)
             flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
             if flg_stop: break
 
-    def _get_user_referents(self, user_id_arr):
-        films = []
-        s = pd.Series()
-        users = {}
-        for user_id in user_id_arr:
-            users[user_id] = User(user_id, self.ds)
-            s = s.append(users[user_id].df_my_marks.film_id)
-        films = s.unique()
 
+    def get_referents2(self):
+        PACK_LEN = 50
+        while len(self.users_id_list) > 0:
+            # make pairs with user_id stepping with 1000 users at once
+            users_pack = {}
+            while len(users_pack) < PACK_LEN:
+                user_id = self.users_id_list.pop(0)
+                users_pack[user_id] = User(user_id, self.ds)
+
+            self._get_user_referents2(users_pack, self.users_id_list)
+            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            if flg_stop: break
+
+
+    def get_referents(self):
+        while len(self.users_id_list) > 0:
+            # make pairs with user_id stepping with 1000 users at once
+            user_id = self.users_id_list.pop(0)
+            u = User(user_id, self.ds)
+            self._get_user_referents(u, self.users_id_list)
+            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            if flg_stop: break
+
+    def _get_user_referents3(self, user_id, df_pos, df_neg):
+
+        u = User(user_id, self.ds)
+        df_ref_pos = df_pos[df_pos.film_id.isin(u.df_my_marks.film_id)]
+        df_ref_neg = df_neg[df_neg.film_id.isin(u.df_my_marks.film_id)]
+
+        df_cr_pos = u.df_my_marks[u.df_my_marks.mark == 1]  # positive user's marks
+        del (df_cr_pos['mark'])
+        df_cr_neg = u.df_my_marks[u.df_my_marks.mark == -1]  # negative user's marks
+        del (df_cr_neg['mark'])
+
+        # get pp matrix (current user's positive mark - other users' positive marks)
+        df_pp = df_cr_pos.merge(df_ref_pos, how='left', on='film_id')
+        df_pp = self._prepare_matrix(df_pp, 'pp')  # got DataFrame with index=referent's id and count of marks in 'pp_marks_cnt' column
+
+        # get pn matrix (current user's positive mark - other users' negative marks)
+        df_pn = df_cr_pos.merge(df_ref_neg, how='left', on='film_id')
+        df_pn = self._prepare_matrix(df_pn, 'pn')  # got DataFrame with index=referent's id and count of marks in 'pn_marks_cnt' column
+
+        # get np matrix (current user's negative mark - other users' positive marks)
+        df_np = df_cr_neg.merge(df_ref_pos, how='left', on='film_id')
+        df_np = self._prepare_matrix(df_np, 'np')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get nn matrix (current user's negative mark - other users' negative marks)
+        df_nn = df_cr_neg.merge(df_ref_neg, how='left', on='film_id')
+        df_nn = self._prepare_matrix(df_nn, 'nn')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get the whole matrix
+        df_total = df_pp.merge(df_pn, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_np, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_nn, on='user_id', how='outer', sort=False)
+        df_total = df_total.fillna(0)
+        df_total.pp = df_total.pp.astype('int32')
+        df_total.np = df_total.np.astype('int32')
+        df_total.pn = df_total.pn.astype('int32')
+        df_total.nn = df_total.nn.astype('int32')
+        df_total['sum'] = df_total.pp + df_total.np + df_total.pn + df_total.nn
+        df_total = df_total[['user_id','pp','pn','np','nn','sum']]
+
+        df_total.to_csv('{}/{}.txt'.format(self.pairs_path, u.id), sep=';', index=False)
+        self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(u.id))
+        print(u.id)
+        self.ds.conn.commit()
+
+    def _get_user_referents2(self, users_pack, ref_arr):
+
+        s_films = pd.Series()
+        for user_id in users_pack.keys():
+            s_films = s_films.append(users_pack[user_id].df_my_marks.film_id)
 
         df_pos = pd.read_csv('{}pos.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
         del (df_pos['mark'])
-        df_pos = df_pos[df_pos.film_id.isin(list(films))]
+        df_pos = df_pos[df_pos.film_id.isin(s_films)]
+        print('df_pos: {}'.format(getsizeof(df_pos)))
 
         df_neg = pd.read_csv('{}neg.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
         del (df_neg['mark'])
-        df_neg = df_neg[df_neg.film_id.isin(list(films))]
+        df_neg = df_neg[df_neg.film_id.isin(s_films)]
+        print('df_neg: {}'.format(getsizeof(df_neg)))
 
-        for user_id in users.keys():
+        df_ref_pos = df_pos[df_pos.user_id.isin(ref_arr)]  # positive marks of other spectators of the films the user saw
+        df_ref_neg = df_neg[df_neg.user_id.isin(ref_arr)]  # negative marks of other spectators of the films the user saw
 
-            df_ref_pos = df_pos[df_pos.film_id.isin(list(users[user_id].df_my_marks.film_id))]  # positive marks of other spectators of the films the user saw
-            df_ref_neg = df_neg[df_neg.film_id.isin(list(users[user_id].df_my_marks.film_id))]  # negative marks of other spectators of the films the user saw
-
-            df_cr_pos = users[user_id].df_my_marks[users[user_id].df_my_marks.mark == 1]  # positive user's marks
+        for user_id in users_pack.keys():
+            u = users_pack[user_id]
+            df_cr_pos = u.df_my_marks[u.df_my_marks.mark == 1]  # positive user's marks
             del (df_cr_pos['mark'])
-            df_cr_neg = users[user_id].df_my_marks[users[user_id].df_my_marks.mark == -1]  # negative user's marks
+            df_cr_neg = u.df_my_marks[u.df_my_marks.mark == -1]  # negative user's marks
             del (df_cr_neg['mark'])
 
             # get pp matrix (current user's positive mark - other users' positive marks)
@@ -238,11 +304,62 @@ class ReferentFinder:
             df_total['sum'] = df_total.pp + df_total.np + df_total.pn + df_total.nn
             df_total = df_total[['user_id','pp','pn','np','nn','sum']]
 
-            # save data
-            df_total.to_csv('{}/{}.txt'.format(self.pairs_path, user_id), sep=';', index=False)
-            self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(user_id))
-            print(user_id)
+            df_total.to_csv('{}/{}.txt'.format(self.pairs_path, u.id), sep=';', index=False)
+            self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(u.id))
+            print(u.id)
+            self.ds.conn.commit()
+
+    def _get_user_referents(self, u, ref_arr):
+
+        df_pos = pd.read_csv('{}pos.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
+        del (df_pos['mark'])
+        df_pos = df_pos[df_pos.film_id.isin(u.df_my_marks.film_id)]
+
+        df_neg = pd.read_csv('{}neg.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'])
+        del (df_neg['mark'])
+        df_neg = df_neg[df_neg.film_id.isin(u.df_my_marks.film_id)]
+
+        df_ref_pos = df_pos[df_pos.user_id.isin(ref_arr)]  # positive marks of other spectators of the films the user saw
+        df_ref_neg = df_neg[df_neg.user_id.isin(ref_arr)]  # negative marks of other spectators of the films the user saw
+
+        df_cr_pos = u.df_my_marks[u.df_my_marks.mark == 1]  # positive user's marks
+        del (df_cr_pos['mark'])
+        df_cr_neg = u.df_my_marks[u.df_my_marks.mark == -1]  # negative user's marks
+        del (df_cr_neg['mark'])
+
+        # get pp matrix (current user's positive mark - other users' positive marks)
+        df_pp = df_cr_pos.merge(df_ref_pos, how='left', on='film_id')
+        df_pp = self._prepare_matrix(df_pp, 'pp')  # got DataFrame with index=referent's id and count of marks in 'pp_marks_cnt' column
+
+        # get pn matrix (current user's positive mark - other users' negative marks)
+        df_pn = df_cr_pos.merge(df_ref_neg, how='left', on='film_id')
+        df_pn = self._prepare_matrix(df_pn, 'pn')  # got DataFrame with index=referent's id and count of marks in 'pn_marks_cnt' column
+
+        # get np matrix (current user's negative mark - other users' positive marks)
+        df_np = df_cr_neg.merge(df_ref_pos, how='left', on='film_id')
+        df_np = self._prepare_matrix(df_np, 'np')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get nn matrix (current user's negative mark - other users' negative marks)
+        df_nn = df_cr_neg.merge(df_ref_neg, how='left', on='film_id')
+        df_nn = self._prepare_matrix(df_nn, 'nn')  # got DataFrame with index=referent's id and count of marks in 'np_marks_cnt' column
+
+        # get the whole matrix
+        df_total = df_pp.merge(df_pn, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_np, on='user_id', how='outer', sort=False)
+        df_total = df_total.merge(df_nn, on='user_id', how='outer', sort=False)
+        df_total = df_total.fillna(0)
+        df_total.pp = df_total.pp.astype('int32')
+        df_total.np = df_total.np.astype('int32')
+        df_total.pn = df_total.pn.astype('int32')
+        df_total.nn = df_total.nn.astype('int32')
+        df_total['sum'] = df_total.pp + df_total.np + df_total.pn + df_total.nn
+        df_total = df_total[['user_id','pp','pn','np','nn','sum']]
+
+        df_total.to_csv('{}/{}.txt'.format(self.pairs_path, u.id), sep=';', index=False)
+        self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(u.id))
+        print(u.id)
         self.ds.conn.commit()
+
 
     def _prepare_matrix(self, df, col_name):
         del (df['film_id'])
@@ -258,4 +375,4 @@ class ReferentFinder:
 if __name__ == '__main__':
     ds = DataSource(False)
     rf = ReferentFinder(ds,False)
-    rf.get_referents()
+    rf.get_referents3()
