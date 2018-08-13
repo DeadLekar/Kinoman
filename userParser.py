@@ -211,68 +211,6 @@ elif compName == "notebook":
 conn = lite.connect(dbasePath)
 c = conn.cursor()
 
-"""
-min_user_id = 2456438
-MAX_USER_ID = 2877814
-while 1:
-    try:
-        for user_id in range(min_user_id, MAX_USER_ID):
-            film_id = 0
-            reviews = GetUserData(user_id)
-            if reviews:
-                for item in reviews:
-                    if item.rating != -1:
-                        film_id = c.execute("SELECT id FROM films WHERE link = '{}'".format(item.film_link)).fetchone()
-                        if film_id:
-                            film_id = film_id[0]
-                        else: # a new film found - save it to db
-                            film_data = GetFilmData(item.film_link)
-                            if film_data:
-                                req = "INSERT INTO films (name,genre,producer,country,link,year) VALUES ('{}','{}','{}','{}','{}',{})".format(film_data.name,film_data.genre,film_data.producer,film_data.country,item.film_link,film_data.year)
-                                c.execute(req)
-                                conn.commit()
-                                film_id = c.execute("SELECT id FROM films WHERE link='{}'".format(item.film_link)).fetchone()[0]
-
-                        if film_id:
-                            req = "INSERT INTO marks (mark,dt,user_id,film_id) VALUES ({},'{}',{},{})".format(item.rating,item.dt,user_id,film_id)
-                            c.execute(req)
-                conn.commit()
-            #time.sleep(0.2)
-            if film_id: print(str(user_id) + '!' + str(film_id))
-            else: print(user_id)
-            min_user_id = user_id + 1
-        else:
-            break
-    except: # restart with new min_user_id
-        pass
-"""
-
-"""
-# stage 2: marks to binomials
-
-# get all users
-users = []
-user_rows = c.execute('SELECT DISTINCT user_id FROM marks WHERE id > 28').fetchall()
-for row in user_rows:
-    users.append(row[0])
-
-for user_id in users:
-    marks = []
-    mark_rows = c.execute('SELECT mark FROM marks WHERE user_id={} ORDER BY mark'.format(user_id))
-    for row in mark_rows:
-        marks.append(row[0])
-
-    if len(marks) % 2 == 0:
-        mediana = (marks[len(marks)-1] + marks[len(marks)-1]) / 2
-    else:
-        mediana = marks[int((len(marks)-1)/2)]
-    #qstr =
-    c.execute('UPDATE marks SET mark={} WHERE user_id={} AND mark<{}'.format(-1, user_id, mediana))
-    c.execute('UPDATE marks SET mark={} WHERE user_id={} AND mark>={}'.format(1,user_id,mediana))
-    conn.commit()
-    print(user_id)
-"""
-
 # calculate modules for each user
 users = []
 users_rows = c.execute("SELECT user_id FROM grp_users WHERE cnt_marks > 1 and user_id >= 494288 ORDER BY user_id").fetchall()
