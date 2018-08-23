@@ -148,17 +148,19 @@ class ReferentFinder:
     flg_to_db = False
     pairs_path = ''
     films_path = ''
-    def __init__(self, _ds, _flg_to_db=True):
+    lvl = 0
+    def __init__(self, _ds, _lvl, _flg_to_db=True):
         # fills user_id_list
         self.ds = _ds
         self.root_files_path = sf.get_right_path(files)
         self.pairs_path = self.root_files_path + 'pairs/'
         self.films_path = self.root_files_path + 'films/'
+        self.lvl = _lvl
 
         cnt_marks_arr = []
         cluster_num_arr = []
         dist_center_arr = []
-        users_rows = self.ds.c.execute("SELECT user_id, cnt_marks, cluster_id, dist_center FROM grp_users WHERE is_checked = 0 ORDER BY user_id")
+        users_rows = self.ds.c.execute("SELECT user_id, cnt_marks, cluster_id, dist_center FROM grp_users WHERE is_checked < {} ORDER BY user_id".format(self.lvl))
         for u_row in users_rows.fetchall():
             self.users_id_list.append(u_row[0])
             cnt_marks_arr.append(u_row[1])
@@ -171,44 +173,21 @@ class ReferentFinder:
             self.films_id_list.append(f_row[0])
 
     def get_referents3(self):
-        df_pos_reader = pd.read_csv('{}pos.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
+        df_pos_reader = pd.read_csv('{}pos{}.txt'.format(self.root_files_path, self.lvl), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
         df_pos = pd.concat(df_pos_reader, ignore_index=True)
         del (df_pos['mark'])
-        df_neg_reader = pd.read_csv('{}neg.txt'.format(self.root_files_path), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
+        df_neg_reader = pd.read_csv('{}neg{}.txt'.format(self.root_files_path, self.lvl), sep=';', names=['user_id', 'mark', 'film_id'], iterator=True, chunksize=1000)
         df_neg = pd.concat(df_neg_reader, ignore_index=True)
         del (df_neg['mark'])
         for user_id in self.users_id_list:
             self._get_user_referents3(user_id, df_pos, df_neg)
-            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
-            if flg_stop: break
-
-
-    def get_referents2(self):
-        PACK_LEN = 50
-        while len(self.users_id_list) > 0:
-            # make pairs with user_id stepping with 1000 users at once
-            users_pack = {}
-            while len(users_pack) < PACK_LEN:
-                user_id = self.users_id_list.pop(0)
-                users_pack[user_id] = User(user_id, self.ds)
-
-            self._get_user_referents2(users_pack, self.users_id_list)
-            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
-            if flg_stop: break
-
-
-    def get_referents(self):
-        while len(self.users_id_list) > 0:
-            # make pairs with user_id stepping with 1000 users at once
-            user_id = self.users_id_list.pop(0)
-            u = User(user_id, self.ds)
-            self._get_user_referents(u, self.users_id_list)
-            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
-            if flg_stop: break
+            # flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            # if flg_stop: break
 
     def _get_user_referents3(self, user_id, df_pos, df_neg):
 
         u = User(user_id, self.ds)
+
         df_ref_pos = df_pos[df_pos.film_id.isin(u.df_my_marks.film_id)]
         df_ref_neg = df_neg[df_neg.film_id.isin(u.df_my_marks.film_id)]
 
@@ -245,10 +224,35 @@ class ReferentFinder:
         df_total['sum'] = df_total.pp + df_total.np + df_total.pn + df_total.nn
         df_total = df_total[['user_id','pp','pn','np','nn','sum']]
 
-        df_total.to_csv('{}/{}.txt'.format(self.pairs_path, u.id), sep=';', index=False)
-        self.ds.c.execute("UPDATE grp_users SET is_checked = 1 WHERE user_id = {}".format(u.id))
+        df_total.to_csv('{}/{}.txt'.format(self.pairs_path, u.id), sep=';', index=False, mode='a')
+        self.ds.c.execute("UPDATE grp_users SET is_checked = {} WHERE user_id = {}".format(u.id, self.lvl))
         print(u.id)
         self.ds.conn.commit()
+
+    def get_referents2(self):
+        PACK_LEN = 50
+        while len(self.users_id_list) > 0:
+            # make pairs with user_id stepping with 1000 users at once
+            users_pack = {}
+            while len(users_pack) < PACK_LEN:
+                user_id = self.users_id_list.pop(0)
+                users_pack[user_id] = User(user_id, self.ds)
+
+            self._get_user_referents2(users_pack, self.users_id_list)
+            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            if flg_stop: break
+
+
+    def get_referents(self):
+        while len(self.users_id_list) > 0:
+            # make pairs with user_id stepping with 1000 users at once
+            user_id = self.users_id_list.pop(0)
+            u = User(user_id, self.ds)
+            self._get_user_referents(u, self.users_id_list)
+            flg_stop = int(open(self.root_files_path + 'stop.txt').read(1))
+            if flg_stop: break
+
+
 
     def _get_user_referents2(self, users_pack, ref_arr):
 
@@ -374,5 +378,7 @@ class ReferentFinder:
 
 if __name__ == '__main__':
     ds = DataSource(False)
-    rf = ReferentFinder(ds,False)
+    rf = ReferentFinder(ds, 1, False)
+    rf.get_referents3()
+    rf = ReferentFinder(ds, 2, False)
     rf.get_referents3()
